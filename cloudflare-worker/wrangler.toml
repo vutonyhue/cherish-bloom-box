@@ -38,7 +38,7 @@ id = "fafe99f97e25403e9dfec9223c4605fc"
 [vars]
 SUPABASE_FUNCTIONS_URL = "https://ovswkgujezxwygselcap.supabase.co/functions/v1"
 # Comma-separated list of allowed origins
-ALLOWED_ORIGINS = "https://holo-talk-cash.lovable.app,https://preview.lovable.app,https://id-preview--95ab1465-109c-431b-9708-379f2eb0fa9b.lovable.app,*.lovable.app,*.lovableproject.com"
+ALLOWED_ORIGINS = "https://cherish-bloom-box.lovable.app,https://id-preview--749ec9dd-2892-4224-a79d-197ee88ac12d.lovable.app"
 
 # ============================================================================
 # Secrets (set via `wrangler secret put` or `npm run setup:secrets`)
