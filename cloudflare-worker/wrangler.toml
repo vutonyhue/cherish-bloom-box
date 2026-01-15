@@ -37,8 +37,10 @@ id = "fafe99f97e25403e9dfec9223c4605fc"
 
 [vars]
 SUPABASE_FUNCTIONS_URL = "https://ovswkgujezxwygselcap.supabase.co/functions/v1"
-# Comma-separated list of allowed origins - includes wildcards for all Lovable domains
-ALLOWED_ORIGINS = "https://cherish-bloom-box.lovable.app,https://id-preview--749ec9dd-2892-4224-a79d-197ee88ac12d.lovable.app,https://749ec9dd-2892-4224-a79d-197ee88ac12d.lovableproject.com,*.lovable.app,*.lovableproject.com,http://localhost:*,http://127.0.0.1:*"
+# CORS mode: "open" (dev/testing - permissive) or "strict" (production - validate origins)
+CORS_MODE = "open"
+# Comma-separated list of allowed origins (used when CORS_MODE = "strict")
+ALLOWED_ORIGINS = "https://cherish-bloom-box.lovable.app,*.lovable.app,*.lovableproject.com,http://localhost:*,http://127.0.0.1:*"
 
 # ============================================================================
 # Secrets (set via `wrangler secret put` or `npm run setup:secrets`)

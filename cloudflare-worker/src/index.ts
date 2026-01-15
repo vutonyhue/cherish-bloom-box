@@ -23,6 +23,7 @@ interface Env {
   SUPABASE_FUNCTIONS_URL: string;
   SUPABASE_JWT_SECRET?: string;
   ALLOWED_ORIGINS?: string;
+  CORS_MODE?: string; // "open" | "strict" - defaults to "open" for dev
 }
 
 interface KeyData {
@@ -132,6 +133,112 @@ const SSE_POLL_INTERVAL = 2000; // 2 seconds
 const SSE_MAX_DURATION = 25000; // 25 seconds (before CF timeout)
 
 // ============================================================================
+// CORS Helpers (Dev Mode - Permissive)
+// ============================================================================
+
+/**
+ * Get CORS headers for a request
+ * - In "open" mode (default): reflect origin or use "*"
+ * - In "strict" mode: validate against ALLOWED_ORIGINS
+ */
+function getCorsHeaders(origin: string | null, env: Env): Record<string, string> {
+  const corsMode = env.CORS_MODE || 'open';
+  
+  let allowOrigin = '*';
+  
+  if (corsMode === 'open') {
+    // DEV MODE: Reflect origin if present, otherwise "*"
+    allowOrigin = origin || '*';
+  } else {
+    // STRICT MODE: Validate against allowed origins
+    if (origin && isOriginAllowedStrict(origin, env.ALLOWED_ORIGINS)) {
+      allowOrigin = origin;
+    } else {
+      allowOrigin = 'null'; // Block by setting to 'null'
+    }
+  }
+  
+  const headers: Record<string, string> = {
+    'Access-Control-Allow-Origin': allowOrigin,
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-funchat-api-key, x-request-id, x-requested-with, x-client-info, apikey',
+    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Max-Age': '86400',
+  };
+  
+  // Add Vary: Origin when reflecting origin (important for caching)
+  if (origin && allowOrigin === origin) {
+    headers['Vary'] = 'Origin';
+  }
+  
+  return headers;
+}
+
+/**
+ * Strict origin validation with wildcard support
+ */
+function isOriginAllowedStrict(origin: string, allowedOriginsEnv?: string): boolean {
+  if (!allowedOriginsEnv) return false;
+  
+  const allowedList = allowedOriginsEnv.split(',').map(o => o.trim()).filter(Boolean);
+  
+  let originHost: string;
+  try {
+    originHost = new URL(origin).hostname;
+  } catch {
+    return false;
+  }
+  
+  return allowedList.some(allowed => {
+    if (allowed === '*') return true;
+    
+    // Wildcard subdomain: *.example.com
+    if (allowed.startsWith('*.')) {
+      const domain = allowed.slice(2);
+      return originHost === domain || originHost.endsWith('.' + domain);
+    }
+    
+    // Localhost with port wildcard: http://localhost:*
+    if (allowed.endsWith(':*')) {
+      const base = allowed.slice(0, -1); // Remove the *
+      return origin.startsWith(base);
+    }
+    
+    // Exact match
+    return origin === allowed;
+  });
+}
+
+/**
+ * Add CORS headers to an existing Response
+ */
+function withCorsHeaders(response: Response, origin: string | null, env: Env): Response {
+  const corsHeaders = getCorsHeaders(origin, env);
+  const newHeaders = new Headers(response.headers);
+  
+  for (const [key, value] of Object.entries(corsHeaders)) {
+    newHeaders.set(key, value);
+  }
+  
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: newHeaders,
+  });
+}
+
+/**
+ * Create CORS preflight response (OPTIONS)
+ */
+function corsPreflightResponse(origin: string | null, env: Env): Response {
+  const corsHeaders = getCorsHeaders(origin, env);
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders,
+  });
+}
+
+// ============================================================================
 // Utility Functions
 // ============================================================================
 
@@ -147,22 +254,21 @@ async function hashApiKey(key: string, salt: string): Promise<string> {
 }
 
 /**
- * Create standardized success response
+ * Create standardized success response with CORS headers
  */
 function successResponse(
   data: unknown,
   requestId: string,
-  origin?: string
+  origin: string | null,
+  env: Env
 ): Response {
-  const headers: HeadersInit = {
+  const corsHeaders = getCorsHeaders(origin, env);
+  
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-Request-ID': requestId,
+    ...corsHeaders,
   };
-
-  if (origin) {
-    headers['Access-Control-Allow-Origin'] = origin;
-    headers['Access-Control-Allow-Credentials'] = 'true';
-  }
 
   return new Response(
     JSON.stringify({
@@ -175,24 +281,23 @@ function successResponse(
 }
 
 /**
- * Create standardized error response
+ * Create standardized error response with CORS headers
  */
 function errorResponse(
   code: string,
   message: string,
   status: number,
   requestId: string,
-  origin?: string
+  origin: string | null,
+  env: Env
 ): Response {
-  const headers: HeadersInit = {
+  const corsHeaders = getCorsHeaders(origin, env);
+  
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-Request-ID': requestId,
+    ...corsHeaders,
   };
-
-  if (origin) {
-    headers['Access-Control-Allow-Origin'] = origin;
-    headers['Access-Control-Allow-Credentials'] = 'true';
-  }
 
   return new Response(
     JSON.stringify({
@@ -209,53 +314,6 @@ function errorResponse(
  */
 function generateRequestId(): string {
   return `req_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-}
-
-/**
- * Check if origin is allowed
- */
-function isOriginAllowed(origin: string | null, allowedOrigins: string[], envAllowed?: string): boolean {
-  // Always allow if no origin (server-to-server requests, curl, etc.)
-  if (!origin) {
-    return true;
-  }
-
-  // Parse env allowed origins
-  const envOrigins = envAllowed?.split(',').map(o => o.trim()).filter(Boolean) || [];
-  const allAllowed = [...allowedOrigins, ...envOrigins];
-  
-  // If no restrictions configured, allow all
-  if (allAllowed.length === 0) {
-    return true;
-  }
-
-  // Parse origin URL to get hostname
-  let originHost: string;
-  try {
-    originHost = new URL(origin).hostname;
-  } catch {
-    return false;
-  }
-
-  return allAllowed.some(allowed => {
-    // Universal wildcard
-    if (allowed === '*') return true;
-    
-    // Subdomain wildcard: *.example.com
-    if (allowed.startsWith('*.')) {
-      const domain = allowed.slice(2);
-      return originHost === domain || originHost.endsWith('.' + domain);
-    }
-    
-    // Localhost with port wildcard: http://localhost:*
-    if (allowed.endsWith(':*')) {
-      const baseUrl = allowed.slice(0, -2);
-      return origin.startsWith(baseUrl + ':');
-    }
-    
-    // Exact match
-    return origin === allowed;
-  });
 }
 
 /**
@@ -625,7 +683,7 @@ async function handleSSEStream(
   // 1. Verify user is member of conversation
   const isMember = await verifyConversationMembership(env, conversationId, userId);
   if (!isMember) {
-    return errorResponse('FORBIDDEN', 'Not a member of this conversation', 403, requestId, origin || undefined);
+    return errorResponse('FORBIDDEN', 'Not a member of this conversation', 403, requestId, origin, env);
   }
 
   // 2. Create SSE stream using TransformStream
@@ -722,18 +780,15 @@ async function handleSSEStream(
     }
   })();
 
-  // Return SSE response immediately
-  const headers: HeadersInit = {
+  // Return SSE response with CORS headers
+  const corsHeaders = getCorsHeaders(origin, env);
+  const headers: Record<string, string> = {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
     'Connection': 'keep-alive',
     'X-Request-ID': requestId,
+    ...corsHeaders,
   };
-
-  if (origin) {
-    headers['Access-Control-Allow-Origin'] = origin;
-    headers['Access-Control-Allow-Credentials'] = 'true';
-  }
 
   return new Response(readable, { headers });
 }
@@ -757,7 +812,7 @@ async function handleUserRoute(
   // Check rate limit for user
   const rateLimit = await checkRateLimit(`user:${userId}`, USER_RATE_LIMIT, env);
   if (!rateLimit.allowed) {
-    const response = errorResponse('RATE_LIMITED', 'Rate limit exceeded', 429, requestId, origin || undefined);
+    const response = errorResponse('RATE_LIMITED', 'Rate limit exceeded', 429, requestId, origin, env);
     response.headers.set('X-RateLimit-Limit', USER_RATE_LIMIT.toString());
     response.headers.set('X-RateLimit-Remaining', '0');
     response.headers.set('X-RateLimit-Reset', rateLimit.resetAt.toString());
@@ -813,12 +868,14 @@ async function handleUserRoute(
   try {
     const response = await fetch(forwardRequest);
 
-    // Clone response and add headers
+    // Clone response and add CORS + rate limit headers
+    const corsHeaders = getCorsHeaders(origin, env);
     const responseHeaders = new Headers(response.headers);
-    if (origin) {
-      responseHeaders.set('Access-Control-Allow-Origin', origin);
-      responseHeaders.set('Access-Control-Allow-Credentials', 'true');
+    
+    for (const [key, value] of Object.entries(corsHeaders)) {
+      responseHeaders.set(key, value);
     }
+    
     responseHeaders.set('X-Request-ID', requestId);
     responseHeaders.set('X-RateLimit-Limit', USER_RATE_LIMIT.toString());
     responseHeaders.set('X-RateLimit-Remaining', rateLimit.remaining.toString());
@@ -831,7 +888,7 @@ async function handleUserRoute(
     });
   } catch (error) {
     console.error('Error forwarding request:', error);
-    return errorResponse('INTERNAL_ERROR', 'Failed to process request', 500, requestId, origin || undefined);
+    return errorResponse('INTERNAL_ERROR', 'Failed to process request', 500, requestId, origin, env);
   }
 }
 
@@ -855,14 +912,15 @@ async function handleApiKeyRoute(
       `Required scope: ${requiredScope}`,
       403,
       requestId,
-      origin || undefined
+      origin,
+      env
     );
   }
 
   // Check rate limit
   const rateLimit = await checkRateLimit(`key:${keyData.id}`, keyData.rate_limit, env);
   if (!rateLimit.allowed) {
-    const response = errorResponse('RATE_LIMITED', 'Rate limit exceeded', 429, requestId, origin || undefined);
+    const response = errorResponse('RATE_LIMITED', 'Rate limit exceeded', 429, requestId, origin, env);
     response.headers.set('X-RateLimit-Limit', keyData.rate_limit.toString());
     response.headers.set('X-RateLimit-Remaining', '0');
     response.headers.set('X-RateLimit-Reset', rateLimit.resetAt.toString());
@@ -894,12 +952,14 @@ async function handleApiKeyRoute(
 
   const response = await fetch(forwardRequest);
 
-  // Clone response and add headers
+  // Clone response and add CORS + rate limit headers
+  const corsHeaders = getCorsHeaders(origin, env);
   const responseHeaders = new Headers(response.headers);
-  if (origin) {
-    responseHeaders.set('Access-Control-Allow-Origin', origin);
-    responseHeaders.set('Access-Control-Allow-Credentials', 'true');
+  
+  for (const [key, value] of Object.entries(corsHeaders)) {
+    responseHeaders.set(key, value);
   }
+  
   responseHeaders.set('X-Request-ID', requestId);
   responseHeaders.set('X-RateLimit-Limit', keyData.rate_limit.toString());
   responseHeaders.set('X-RateLimit-Remaining', rateLimit.remaining.toString());
@@ -922,97 +982,113 @@ export default {
     const origin = request.headers.get('Origin');
     const requestId = generateRequestId();
 
-    // Handle CORS preflight - be permissive to avoid blocking legitimate requests
+    // =========================================================================
+    // CORS PREFLIGHT - Handle OPTIONS first, ALWAYS return with CORS headers
+    // =========================================================================
     if (request.method === 'OPTIONS') {
-      const corsOrigin = origin && isOriginAllowed(origin, [], env.ALLOWED_ORIGINS) ? origin : '*';
-      return new Response(null, {
-        status: 204,
-        headers: {
-          'Access-Control-Allow-Origin': corsOrigin,
-          'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-funchat-api-key, x-request-id, x-client-info, apikey',
-          'Access-Control-Max-Age': '86400',
-          'Access-Control-Allow-Credentials': 'true',
-        },
-      });
+      return corsPreflightResponse(origin, env);
     }
 
-    // Health check endpoint
-    if (isPublicRoute(url.pathname)) {
-      return successResponse(
-        {
-          status: 'healthy',
-          version: '2.0.0',
-          timestamp: new Date().toISOString(),
-        },
+    // =========================================================================
+    // WRAP ENTIRE REQUEST IN TRY/CATCH - Ensure ALL responses have CORS headers
+    // =========================================================================
+    try {
+      // Health check endpoint
+      if (isPublicRoute(url.pathname)) {
+        return successResponse(
+          {
+            status: 'healthy',
+            version: '2.1.0',
+            cors_mode: env.CORS_MODE || 'open',
+            timestamp: new Date().toISOString(),
+          },
+          requestId,
+          origin,
+          env
+        );
+      }
+
+      // Check for API key (SDK/third-party apps)
+      const apiKey = request.headers.get('x-funchat-api-key');
+      if (apiKey) {
+        // Validate API key format
+        if (!apiKey.startsWith('fc_live_') && !apiKey.startsWith('fc_test_')) {
+          return errorResponse('INVALID_API_KEY', 'Invalid API key format', 401, requestId, origin, env);
+        }
+
+        // Verify API key
+        const keyData = await verifyApiKey(apiKey, env);
+        if (!keyData) {
+          return errorResponse('INVALID_API_KEY', 'Invalid API key', 401, requestId, origin, env);
+        }
+
+        // Check if key is active
+        if (!keyData.is_active) {
+          return errorResponse('API_KEY_INACTIVE', 'API key is inactive', 403, requestId, origin, env);
+        }
+
+        // Check expiration
+        if (keyData.expires_at && new Date(keyData.expires_at) < new Date()) {
+          return errorResponse('API_KEY_EXPIRED', 'API key has expired', 403, requestId, origin, env);
+        }
+
+        // In strict mode, validate origin. In open mode, skip origin check
+        const corsMode = env.CORS_MODE || 'open';
+        if (corsMode === 'strict') {
+          if (!isOriginAllowedStrict(origin || '', env.ALLOWED_ORIGINS)) {
+            return errorResponse('ORIGIN_NOT_ALLOWED', 'Origin not allowed', 403, requestId, origin, env);
+          }
+        }
+
+        return handleApiKeyRoute(request, env, keyData, requestId, origin);
+      }
+
+      // Check for SSE stream route: /v1/conversations/:id/stream
+      const streamMatch = url.pathname.match(/^\/v1\/conversations\/([^/]+)\/stream$/);
+      if (streamMatch) {
+        const conversationId = streamMatch[1];
+        
+        // SSE uses token in query param (EventSource doesn't support custom headers)
+        const tokenParam = url.searchParams.get('token');
+        const authHeader = tokenParam ? `Bearer ${tokenParam}` : request.headers.get('Authorization');
+        
+        const authResult = await verifyAuthHeader(authHeader, env);
+        if (!authResult) {
+          return errorResponse('UNAUTHORIZED', 'Invalid or expired token', 401, requestId, origin, env);
+        }
+
+        return handleSSEStream(request, env, conversationId, authResult.payload.sub, requestId, origin);
+      }
+
+      // Check for user routes (JWT auth)
+      if (isUserRoute(url.pathname)) {
+        const authHeader = request.headers.get('Authorization');
+        const authResult = await verifyAuthHeader(authHeader, env);
+
+        if (!authResult) {
+          return errorResponse('UNAUTHORIZED', 'Invalid or expired token', 401, requestId, origin, env);
+        }
+
+        return handleUserRoute(request, env, authResult.payload.sub, requestId, origin);
+      }
+
+      // Unknown route
+      return errorResponse('NOT_FOUND', 'Endpoint not found', 404, requestId, origin, env);
+
+    } catch (error) {
+      // =====================================================================
+      // CRITICAL: Catch ALL errors and return with CORS headers
+      // This ensures frontend can read error JSON even for 500 errors
+      // =====================================================================
+      console.error('[Gateway Error]', error);
+      return errorResponse(
+        'INTERNAL_ERROR',
+        error instanceof Error ? error.message : 'An unexpected error occurred',
+        500,
         requestId,
-        origin || undefined
+        origin,
+        env
       );
     }
-
-    // Check for API key (SDK/third-party apps)
-    const apiKey = request.headers.get('x-funchat-api-key');
-    if (apiKey) {
-      // Validate API key format
-      if (!apiKey.startsWith('fc_live_') && !apiKey.startsWith('fc_test_')) {
-        return errorResponse('INVALID_API_KEY', 'Invalid API key format', 401, requestId, origin || undefined);
-      }
-
-      // Verify API key
-      const keyData = await verifyApiKey(apiKey, env);
-      if (!keyData) {
-        return errorResponse('INVALID_API_KEY', 'Invalid API key', 401, requestId, origin || undefined);
-      }
-
-      // Check if key is active
-      if (!keyData.is_active) {
-        return errorResponse('API_KEY_INACTIVE', 'API key is inactive', 403, requestId, origin || undefined);
-      }
-
-      // Check expiration
-      if (keyData.expires_at && new Date(keyData.expires_at) < new Date()) {
-        return errorResponse('API_KEY_EXPIRED', 'API key has expired', 403, requestId, origin || undefined);
-      }
-
-      // Check origin
-      if (!isOriginAllowed(origin, keyData.allowed_origins, env.ALLOWED_ORIGINS)) {
-        return errorResponse('ORIGIN_NOT_ALLOWED', 'Origin not allowed', 403, requestId, origin || undefined);
-      }
-
-      return handleApiKeyRoute(request, env, keyData, requestId, origin);
-    }
-
-    // Check for SSE stream route: /v1/conversations/:id/stream
-    const streamMatch = url.pathname.match(/^\/v1\/conversations\/([^/]+)\/stream$/);
-    if (streamMatch) {
-      const conversationId = streamMatch[1];
-      
-      // SSE uses token in query param (EventSource doesn't support custom headers)
-      const tokenParam = url.searchParams.get('token');
-      const authHeader = tokenParam ? `Bearer ${tokenParam}` : request.headers.get('Authorization');
-      
-      const authResult = await verifyAuthHeader(authHeader, env);
-      if (!authResult) {
-        return errorResponse('UNAUTHORIZED', 'Invalid or expired token', 401, requestId, origin || undefined);
-      }
-
-      return handleSSEStream(request, env, conversationId, authResult.payload.sub, requestId, origin);
-    }
-
-    // Check for user routes (JWT auth)
-    if (isUserRoute(url.pathname)) {
-      const authHeader = request.headers.get('Authorization');
-      const authResult = await verifyAuthHeader(authHeader, env);
-
-      if (!authResult) {
-        return errorResponse('UNAUTHORIZED', 'Invalid or expired token', 401, requestId, origin || undefined);
-      }
-
-      // Pass user ID for rate limiting, original token is already in request headers
-      return handleUserRoute(request, env, authResult.payload.sub, requestId, origin);
-    }
-
-    // Unknown route
-    return errorResponse('NOT_FOUND', 'Endpoint not found', 404, requestId, origin || undefined);
   },
 };
