@@ -126,6 +126,11 @@ const PUBLIC_ROUTES = [
   '/',
 ];
 
+// SSE Configuration
+const SSE_HEARTBEAT_INTERVAL = 15000; // 15 seconds
+const SSE_POLL_INTERVAL = 2000; // 2 seconds
+const SSE_MAX_DURATION = 25000; // 25 seconds (before CF timeout)
+
 // ============================================================================
 // Utility Functions
 // ============================================================================
@@ -509,6 +514,208 @@ async function checkRateLimit(
 }
 
 // ============================================================================
+// SSE (Server-Sent Events) Handler
+// ============================================================================
+
+interface SSEState {
+  lastMessageId: string | null;
+  lastMessageTime: number;
+}
+
+/**
+ * Verify user is member of conversation
+ */
+async function verifyConversationMembership(
+  env: Env,
+  conversationId: string,
+  userId: string
+): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `${env.SUPABASE_URL}/rest/v1/conversation_members?conversation_id=eq.${conversationId}&user_id=eq.${userId}&select=id`,
+      {
+        headers: {
+          'apikey': env.SUPABASE_SERVICE_KEY,
+          'Authorization': `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+        },
+      }
+    );
+
+    if (!response.ok) return false;
+    const data = await response.json() as unknown[];
+    return Array.isArray(data) && data.length > 0;
+  } catch (error) {
+    console.error('[SSE] Membership check error:', error);
+    return false;
+  }
+}
+
+/**
+ * Fetch new messages since lastMessageId
+ */
+async function fetchNewMessages(
+  env: Env,
+  conversationId: string,
+  lastMessageId: string | null
+): Promise<any[]> {
+  let url = `${env.SUPABASE_URL}/rest/v1/messages?conversation_id=eq.${conversationId}&is_deleted=eq.false&order=created_at.asc&limit=50`;
+  
+  if (lastMessageId) {
+    // Get messages created after the last one using id comparison
+    url += `&id=gt.${lastMessageId}`;
+  }
+
+  // Also fetch sender info
+  url += '&select=*,sender:profiles!sender_id(id,username,display_name,avatar_url)';
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'apikey': env.SUPABASE_SERVICE_KEY,
+        'Authorization': `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+      },
+    });
+
+    if (!response.ok) {
+      console.error('[SSE] Failed to fetch messages:', await response.text());
+      return [];
+    }
+
+    return response.json();
+  } catch (error) {
+    console.error('[SSE] Fetch messages error:', error);
+    return [];
+  }
+}
+
+/**
+ * Handle SSE stream for conversation messages
+ */
+async function handleSSEStream(
+  request: Request,
+  env: Env,
+  conversationId: string,
+  userId: string,
+  requestId: string,
+  origin: string | null
+): Promise<Response> {
+  // 1. Verify user is member of conversation
+  const isMember = await verifyConversationMembership(env, conversationId, userId);
+  if (!isMember) {
+    return errorResponse('FORBIDDEN', 'Not a member of this conversation', 403, requestId, origin || undefined);
+  }
+
+  // 2. Create SSE stream using TransformStream
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+
+  // Track state
+  const state: SSEState = {
+    lastMessageId: null,
+    lastMessageTime: Date.now(),
+  };
+
+  // Helper to send SSE events
+  const sendEvent = async (event: string, data: unknown): Promise<boolean> => {
+    try {
+      await writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      return true;
+    } catch (e) {
+      console.error('[SSE] Write error:', e);
+      return false;
+    }
+  };
+
+  // Start time for duration limit
+  const startTime = Date.now();
+  let isRunning = true;
+
+  // Cleanup function
+  const cleanup = async () => {
+    isRunning = false;
+    try {
+      await writer.close();
+    } catch (e) {
+      // Already closed
+    }
+  };
+
+  // Handle client disconnect
+  request.signal.addEventListener('abort', () => {
+    console.log('[SSE] Client disconnected');
+    cleanup();
+  });
+
+  // Start async processing
+  (async () => {
+    // Send initial connection success
+    await sendEvent('connected', {
+      conversation_id: conversationId,
+      user_id: userId,
+      timestamp: Date.now(),
+    });
+
+    // Main loop: poll for messages and send heartbeats
+    let lastHeartbeat = Date.now();
+    
+    while (isRunning) {
+      // Check duration limit (Cloudflare Workers timeout)
+      if (Date.now() - startTime > SSE_MAX_DURATION) {
+        await sendEvent('reconnect', { reason: 'timeout' });
+        await cleanup();
+        return;
+      }
+
+      // Send heartbeat if needed
+      if (Date.now() - lastHeartbeat > SSE_HEARTBEAT_INTERVAL) {
+        const sent = await sendEvent('ping', { ts: Date.now() });
+        if (!sent) {
+          await cleanup();
+          return;
+        }
+        lastHeartbeat = Date.now();
+      }
+
+      // Poll for new messages
+      try {
+        const newMessages = await fetchNewMessages(env, conversationId, state.lastMessageId);
+        
+        for (const msg of newMessages) {
+          const sent = await sendEvent('message', msg);
+          if (!sent) {
+            await cleanup();
+            return;
+          }
+          state.lastMessageId = msg.id;
+          state.lastMessageTime = Date.now();
+        }
+      } catch (e) {
+        console.error('[SSE] Poll error:', e);
+      }
+
+      // Wait before next poll
+      await new Promise(resolve => setTimeout(resolve, SSE_POLL_INTERVAL));
+    }
+  })();
+
+  // Return SSE response immediately
+  const headers: HeadersInit = {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Request-ID': requestId,
+  };
+
+  if (origin) {
+    headers['Access-Control-Allow-Origin'] = origin;
+    headers['Access-Control-Allow-Credentials'] = 'true';
+  }
+
+  return new Response(readable, { headers });
+}
+
+// ============================================================================
 // Route Handlers
 // ============================================================================
 
@@ -747,6 +954,23 @@ export default {
       }
 
       return handleApiKeyRoute(request, env, keyData, requestId, origin);
+    }
+
+    // Check for SSE stream route: /v1/conversations/:id/stream
+    const streamMatch = url.pathname.match(/^\/v1\/conversations\/([^/]+)\/stream$/);
+    if (streamMatch) {
+      const conversationId = streamMatch[1];
+      
+      // SSE uses token in query param (EventSource doesn't support custom headers)
+      const tokenParam = url.searchParams.get('token');
+      const authHeader = tokenParam ? `Bearer ${tokenParam}` : request.headers.get('Authorization');
+      
+      const authResult = await verifyAuthHeader(authHeader, env);
+      if (!authResult) {
+        return errorResponse('UNAUTHORIZED', 'Invalid or expired token', 401, requestId, origin || undefined);
+      }
+
+      return handleSSEStream(request, env, conversationId, authResult.payload.sub, requestId, origin);
     }
 
     // Check for user routes (JWT auth)
