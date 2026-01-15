@@ -256,6 +256,52 @@ serve(async (req) => {
       return successResponse(data || [], 200, { count: data?.length || 0 });
     }
 
+    // Route: GET /api-chat/conversations/direct/:userId - Find direct conversation with another user
+    if (req.method === 'GET' && pathParts.includes('conversations') && pathParts.includes('direct')) {
+      if (!hasScope(scopes, 'chat:read')) {
+        return errorResponse('FORBIDDEN', 'Requires chat:read scope', 403);
+      }
+
+      const otherUserId = pathParts[pathParts.indexOf('direct') + 1];
+      if (!otherUserId) {
+        return errorResponse('VALIDATION_ERROR', 'User ID is required', 400);
+      }
+
+      // Get conversations where current user is a member
+      const { data: memberData } = await supabase
+        .from('conversation_members')
+        .select('conversation_id')
+        .eq('user_id', userId);
+
+      const conversationIds = memberData?.map((m: any) => m.conversation_id) || [];
+
+      if (conversationIds.length === 0) {
+        await logUsage(supabase, auth, `/conversations/direct/${otherUserId}`, 'GET', 200, Date.now() - startTime, ipAddress);
+        return successResponse(null);
+      }
+
+      // Find non-group conversations and check members
+      const { data: conversations } = await supabase
+        .from('conversations')
+        .select(`
+          *,
+          members:conversation_members(user_id, role)
+        `)
+        .in('id', conversationIds)
+        .eq('is_group', false);
+
+      // Find conversation where both users are members and it's a 1-on-1
+      const directConv = conversations?.find((conv: any) => {
+        const memberIds = conv.members?.map((m: any) => m.user_id) || [];
+        return memberIds.length === 2 && 
+               memberIds.includes(userId) && 
+               memberIds.includes(otherUserId);
+      });
+
+      await logUsage(supabase, auth, `/conversations/direct/${otherUserId}`, 'GET', 200, Date.now() - startTime, ipAddress);
+      return successResponse(directConv || null);
+    }
+
     // Route: POST /api-chat/conversations
     if (req.method === 'POST' && pathParts.includes('conversations') && !pathParts.includes('messages') && !pathParts.includes('leave')) {
       if (!hasScope(scopes, 'chat:write')) {

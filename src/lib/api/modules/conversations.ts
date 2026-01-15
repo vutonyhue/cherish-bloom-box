@@ -77,7 +77,12 @@ export function createConversationsApi(client: ApiClient) {
      * Check for existing 1-on-1 conversation with another user
      */
     async findDirectConversation(otherUserId: string): Promise<ApiResponse<ConversationResponse | null>> {
-      return client.get<ConversationResponse | null>(`/v1/conversations/direct/${otherUserId}`);
+      const response = await client.get<ConversationResponse | null>(`/v1/conversations/direct/${otherUserId}`);
+      // Treat 404 as "not found" - return null instead of error
+      if (!response.ok && response.error?.message?.includes('404')) {
+        return { ok: true, data: null };
+      }
+      return response;
     },
   };
 }
