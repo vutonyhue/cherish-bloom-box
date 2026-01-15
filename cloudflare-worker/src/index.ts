@@ -137,41 +137,38 @@ const SSE_MAX_DURATION = 25000; // 25 seconds (before CF timeout)
 // ============================================================================
 
 /**
- * Get CORS headers for a request
- * - In "open" mode (default): reflect origin or use "*"
+ * Get CORS headers for a request - SIMPLIFIED for dev mode
+ * - In "open" mode (default): ALWAYS reflect origin, no validation
  * - In "strict" mode: validate against ALLOWED_ORIGINS
  */
 function getCorsHeaders(origin: string | null, env: Env): Record<string, string> {
   const corsMode = env.CORS_MODE || 'open';
   
-  let allowOrigin = '*';
-  
+  // DEV MODE (open): Always reflect origin or use wildcard
   if (corsMode === 'open') {
-    // DEV MODE: Reflect origin if present, otherwise "*"
-    allowOrigin = origin || '*';
-  } else {
-    // STRICT MODE: Validate against allowed origins
-    if (origin && isOriginAllowedStrict(origin, env.ALLOWED_ORIGINS)) {
-      allowOrigin = origin;
-    } else {
-      allowOrigin = 'null'; // Block by setting to 'null'
-    }
+    return {
+      'Access-Control-Allow-Origin': origin || '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-funchat-api-key, x-request-id, x-requested-with, x-client-info, apikey',
+      'Access-Control-Allow-Credentials': 'true',
+      'Access-Control-Max-Age': '86400',
+      'Vary': 'Origin',
+    };
   }
   
-  const headers: Record<string, string> = {
+  // STRICT MODE: Validate against allowed origins
+  const allowOrigin = origin && isOriginAllowedStrict(origin, env.ALLOWED_ORIGINS)
+    ? origin
+    : 'null';
+    
+  return {
     'Access-Control-Allow-Origin': allowOrigin,
     'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-funchat-api-key, x-request-id, x-requested-with, x-client-info, apikey',
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Max-Age': '86400',
+    'Vary': 'Origin',
   };
-  
-  // Add Vary: Origin when reflecting origin (important for caching)
-  if (origin && allowOrigin === origin) {
-    headers['Vary'] = 'Origin';
-  }
-  
-  return headers;
 }
 
 /**
@@ -982,10 +979,14 @@ export default {
     const origin = request.headers.get('Origin');
     const requestId = generateRequestId();
 
+    // DEBUG: Log all requests for troubleshooting CORS issues
+    console.log('[Gateway]', request.method, url.pathname, { origin, corsMode: env.CORS_MODE || 'open' });
+
     // =========================================================================
     // CORS PREFLIGHT - Handle OPTIONS first, ALWAYS return with CORS headers
     // =========================================================================
     if (request.method === 'OPTIONS') {
+      console.log('[Gateway] Preflight request for:', url.pathname);
       return corsPreflightResponse(origin, env);
     }
 
