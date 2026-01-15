@@ -1,5 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from './useAuth';
 import { api } from '@/lib/api';
 
@@ -18,12 +17,23 @@ export interface ReactionGroup {
   hasReacted: boolean;
 }
 
+/**
+ * useReactions hook - Manages message reactions
+ * 
+ * Refactored to use API Gateway instead of Supabase realtime.
+ * Reactions are fetched via API and updated via polling.
+ */
 export function useReactions(conversationId: string | null) {
   const { user } = useAuth();
   const [reactions, setReactions] = useState<Map<string, Reaction[]>>(new Map());
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastFetchedMessageIds = useRef<string[]>([]);
 
   const fetchReactions = useCallback(async (messageIds: string[]) => {
     if (!messageIds.length) return;
+
+    // Store for polling
+    lastFetchedMessageIds.current = messageIds;
 
     try {
       const response = await api.reactions.getForMessages(messageIds);
@@ -45,62 +55,24 @@ export function useReactions(conversationId: string | null) {
     }
   }, []);
 
-  // Subscribe to realtime reactions
+  // Setup polling for reaction updates
   useEffect(() => {
     if (!conversationId) return;
 
-    const channel = supabase
-      .channel(`reactions:${conversationId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'message_reactions',
-        },
-        (payload) => {
-          if (payload.eventType === 'INSERT') {
-            const newReaction = payload.new as Reaction;
-            setReactions(prev => {
-              const updated = new Map(prev);
-              const existing = updated.get(newReaction.message_id) || [];
-              
-              // Check if already exists (from optimistic update)
-              const existingIndex = existing.findIndex(r => 
-                r.id === newReaction.id || 
-                (r.user_id === newReaction.user_id && r.emoji === newReaction.emoji)
-              );
-              
-              if (existingIndex >= 0) {
-                // Replace temp with real reaction
-                const newExisting = [...existing];
-                newExisting[existingIndex] = newReaction;
-                updated.set(newReaction.message_id, newExisting);
-              } else {
-                updated.set(newReaction.message_id, [...existing, newReaction]);
-              }
-              return updated;
-            });
-          } else if (payload.eventType === 'DELETE') {
-            const oldReaction = payload.old as Reaction;
-            setReactions(prev => {
-              const updated = new Map(prev);
-              const existing = updated.get(oldReaction.message_id) || [];
-              updated.set(
-                oldReaction.message_id,
-                existing.filter(r => r.id !== oldReaction.id)
-              );
-              return updated;
-            });
-          }
-        }
-      )
-      .subscribe();
+    // Poll for reaction updates every 5 seconds
+    pollIntervalRef.current = setInterval(async () => {
+      if (lastFetchedMessageIds.current.length > 0) {
+        await fetchReactions(lastFetchedMessageIds.current);
+      }
+    }, 5000);
 
     return () => {
-      supabase.removeChannel(channel);
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
     };
-  }, [conversationId]);
+  }, [conversationId, fetchReactions]);
 
   const toggleReaction = async (messageId: string, emoji: string) => {
     if (!user) return;
@@ -158,6 +130,16 @@ export function useReactions(conversationId: string | null) {
             const updated = new Map(prev);
             const existing = updated.get(messageId) || [];
             updated.set(messageId, existing.filter(r => r.id !== tempReaction.id));
+            return updated;
+          });
+        } else if (response.data) {
+          // Replace temp with real reaction
+          setReactions(prev => {
+            const updated = new Map(prev);
+            const existing = updated.get(messageId) || [];
+            updated.set(messageId, existing.map(r => 
+              r.id === tempReaction.id ? { ...r, id: response.data!.id } : r
+            ));
             return updated;
           });
         }

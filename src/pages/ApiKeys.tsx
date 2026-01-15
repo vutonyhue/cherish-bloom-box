@@ -37,11 +37,11 @@ interface ApiKey {
   id: string;
   name: string;
   key_prefix: string;
-  permissions: Record<string, boolean>;
-  rate_limit: number;
-  is_active: boolean;
+  permissions: Record<string, boolean> | null;
+  rate_limit?: number;
+  is_active: boolean | null;
   last_used_at: string | null;
-  created_at: string;
+  created_at: string | null;
   expires_at: string | null;
 }
 

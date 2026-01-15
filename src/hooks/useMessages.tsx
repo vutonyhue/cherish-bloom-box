@@ -1,15 +1,22 @@
-import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from './useAuth';
 import { Message, Profile } from '@/types';
-import { api } from '@/lib/api';
+import { api, API_BASE_URL, getAccessToken, createPollingConnection, SSEConnection } from '@/lib/api';
 import { toast } from 'sonner';
 
+/**
+ * useMessages hook - Manages chat messages for a conversation
+ * 
+ * Refactored to use API Gateway instead of direct Supabase access.
+ * Uses polling for realtime updates (SSE can be enabled when Worker supports it).
+ */
 export function useMessages(conversationId: string | null) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [userProfile, setUserProfile] = useState<Profile | null>(null);
+  const connectionRef = useRef<SSEConnection | null>(null);
+  const lastFetchRef = useRef<string | null>(null);
 
   // Fetch current user profile for optimistic updates
   useEffect(() => {
@@ -46,7 +53,14 @@ export function useMessages(conversationId: string | null) {
       return;
     }
 
-    setLoading(true);
+    // Prevent duplicate fetches
+    const fetchKey = `${conversationId}-${Date.now()}`;
+    if (lastFetchRef.current === conversationId && messages.length > 0) {
+      // Just refresh without clearing
+    } else {
+      setLoading(true);
+    }
+    lastFetchRef.current = conversationId;
 
     try {
       const response = await api.messages.list(conversationId);
@@ -88,106 +102,69 @@ export function useMessages(conversationId: string | null) {
     fetchMessages();
   }, [fetchMessages]);
 
-  // Subscribe to realtime messages (INSERT and UPDATE)
+  // Setup polling for realtime updates
+  // Note: Replace with SSE when Worker supports long-lived connections
   useEffect(() => {
     if (!conversationId || !user) return;
 
-    const channel = supabase
-      .channel(`messages:${conversationId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-          filter: `conversation_id=eq.${conversationId}`,
-        },
-        async (payload) => {
-          const newMessage = payload.new as Message;
-          
-          // Skip if this is our own message (already added via optimistic update)
-          if (newMessage.sender_id === user.id) {
+    // Create polling connection for realtime updates
+    connectionRef.current = createPollingConnection(
+      async () => {
+        // Only fetch if we already have messages (to detect new ones)
+        if (messages.length > 0) {
+          const response = await api.messages.list(conversationId, { limit: 20 });
+          if (response.ok && response.data) {
+            const newMessages = response.data.messages;
+            
             setMessages(prev => {
-              // Check if we already have this exact message from server
-              const existingRealMessage = prev.find(m => m.id === newMessage.id);
-              if (existingRealMessage) return prev;
+              // Find truly new messages
+              const existingIds = new Set(prev.map(m => m.id));
+              const additions = newMessages.filter(m => !existingIds.has(m.id));
               
-              // Check for matching optimistic message (temp ID, same content)
-              const optimisticMatch = prev.find(m => 
-                m._sending && 
-                m.sender_id === newMessage.sender_id && 
-                m.content === newMessage.content
-              );
-              
-              if (optimisticMatch) {
-                // Replace optimistic message with real one
-                return prev.map(m => 
-                  m.id === optimisticMatch.id 
-                    ? { ...newMessage, sender: userProfile || m.sender, _sending: false }
-                    : m
-                );
+              if (additions.length > 0) {
+                // Add new messages, maintaining optimistic ones
+                const optimisticMessages = prev.filter(m => m._sending);
+                const serverMessages = prev.filter(m => !m._sending);
+                
+                // Merge: server messages + new additions + optimistic
+                const merged = [...serverMessages];
+                additions.forEach(newMsg => {
+                  // Check if this is a server confirmation of an optimistic message
+                  const matchingOptimistic = optimisticMessages.find(opt => 
+                    opt.content === newMsg.content && 
+                    opt.sender_id === newMsg.sender_id
+                  );
+                  
+                  if (matchingOptimistic) {
+                    // Replace optimistic with real
+                    const idx = optimisticMessages.indexOf(matchingOptimistic);
+                    if (idx > -1) optimisticMessages.splice(idx, 1);
+                  }
+                  
+                  if (!merged.some(m => m.id === newMsg.id)) {
+                    merged.push(newMsg as Message);
+                  }
+                });
+                
+                return [...merged, ...optimisticMessages];
               }
               
-              // Add new message (edge case - shouldn't normally happen)
-              return [...prev, { ...newMessage, sender: userProfile || undefined }];
+              return prev;
             });
-            return;
           }
-
-          // For messages from others, fetch their profile and add
-          let senderProfile: Profile | undefined;
-          
-          if (newMessage.sender_id) {
-            try {
-              const profileRes = await api.users.getProfile(newMessage.sender_id);
-              if (profileRes.ok && profileRes.data) {
-                senderProfile = profileRes.data as Profile;
-              }
-            } catch (e) {
-              // Fallback: fetch from Supabase directly
-              const { data: profile } = await supabase
-                .from('profiles')
-                .select('*')
-                .eq('id', newMessage.sender_id)
-                .maybeSingle();
-              
-              senderProfile = profile as Profile;
-            }
-          }
-
-          setMessages(prev => {
-            // Check for duplicates
-            if (prev.some(m => m.id === newMessage.id)) return prev;
-            return [...prev, { ...newMessage, sender: senderProfile }];
-          });
         }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'messages',
-          filter: `conversation_id=eq.${conversationId}`,
-        },
-        (payload) => {
-          const updatedMessage = payload.new as Message;
-          
-          setMessages(prev => 
-            prev.map(m => 
-              m.id === updatedMessage.id 
-                ? { ...m, ...updatedMessage }
-                : m
-            )
-          );
-        }
-      )
-      .subscribe();
+      },
+      {
+        onError: (error) => console.error('[useMessages] Polling error:', error),
+      },
+      3000 // Poll every 3 seconds
+    );
 
     return () => {
-      supabase.removeChannel(channel);
+      connectionRef.current?.close();
+      connectionRef.current = null;
     };
-  }, [conversationId, user, userProfile]);
+  }, [conversationId, user, messages.length]);
 
   // Send message with OPTIMISTIC UPDATE
   const sendMessage = async (content: string, messageType = 'text', metadata = {}, replyToId?: string) => {
@@ -390,7 +367,7 @@ export function useMessages(conversationId: string | null) {
       const messageType = isImage ? 'image' : 'file';
       const content = caption || (isImage ? 'Đã gửi hình ảnh' : `Đã gửi file: ${file.name}`);
 
-      // 4. Send message via API (not calling sendMessage to avoid double optimistic update)
+      // 4. Send message via API
       const response = await api.messages.send(conversationId, {
         content,
         message_type: messageType,

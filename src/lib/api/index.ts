@@ -2,7 +2,9 @@
  * FunChat API Module
  * 
  * Centralized API client for all backend communication through Cloudflare Worker.
- * Supabase is only used for Auth and Realtime - all data operations go through the API.
+ * Supabase is only used for Auth - all data operations go through the API.
+ * 
+ * Architecture: Frontend → Cloudflare Worker API Gateway → Supabase DB
  */
 
 import { ApiClient } from './apiClient';
@@ -18,9 +20,12 @@ import { createReadReceiptsApi } from './modules/readReceipts';
 import { createMediaApi } from './modules/media';
 import { createRewardsApi } from './modules/rewards';
 import { createApiKeysApi } from './modules/apiKeys';
+import { createReferralApi } from './modules/referral';
+import { createStorageApi } from './modules/storage';
+import { createTypingApi } from './modules/typing';
 
 // Get base URL from environment or default to production
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://funchat-api-gateway.india-25d.workers.dev';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://funchat-api-gateway.india-25d.workers.dev';
 
 // Debug mode in development
 const DEBUG = import.meta.env.DEV;
@@ -43,6 +48,12 @@ const apiClient = new ApiClient({
   debug: DEBUG,
 });
 
+// Helper to get access token for SSE connections
+export const getAccessToken = async (): Promise<string | null> => {
+  const { data: { session } } = await supabase.auth.getSession();
+  return session?.access_token ?? null;
+};
+
 // Export API modules
 export const api = {
   auth: createAuthApi(apiClient),
@@ -54,10 +65,17 @@ export const api = {
   media: createMediaApi(apiClient),
   rewards: createRewardsApi(apiClient),
   apiKeys: createApiKeysApi(apiClient),
+  referral: createReferralApi(apiClient),
+  storage: createStorageApi(apiClient),
+  typing: createTypingApi(apiClient),
 };
 
 // Export types
 export * from './types';
+
+// Export SSE utilities
+export { createSSEConnection, createPollingConnection } from './modules/sse';
+export type { SSECallbacks, SSEConnection, TypingEvent, PresenceEvent } from './modules/sse';
 
 // Export client for advanced usage
 export { apiClient };
