@@ -25,8 +25,8 @@ import { createStorageApi } from './modules/storage';
 import { createTypingApi } from './modules/typing';
 import { createWidgetApi } from './modules/widget';
 
-// Get base URL from environment or default to production
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://funchat-api-gateway.india-25d.workers.dev';
+// API Gateway URL
+export const API_BASE_URL = 'https://funchat-api-gateway.yeuchat.workers.dev';
 
 // Debug mode in development
 const DEBUG = import.meta.env.DEV;
