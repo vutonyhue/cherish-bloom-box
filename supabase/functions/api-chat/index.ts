@@ -233,36 +233,19 @@ serve(async (req) => {
         return successResponse(data);
       }
 
-      // List all conversations
+      // List all conversations using RPC function (bypasses RLS)
       console.log('[DEBUG] Fetching conversations for userId:', userId);
       
-      const { data: memberData, error: memberError } = await supabase
-        .from('conversation_members')
-        .select('conversation_id')
-        .eq('user_id', userId);
-
-      console.log('[DEBUG] memberData:', JSON.stringify(memberData));
-      console.log('[DEBUG] memberError:', memberError);
-
-      const conversationIds = memberData?.map((m: any) => m.conversation_id) || [];
-
-      if (conversationIds.length === 0) {
-        await logUsage(supabase, auth, '/conversations', 'GET', 200, Date.now() - startTime, ipAddress);
-        return successResponse([], 200, { count: 0 });
-      }
-
       const { data, error } = await supabase
-        .from('conversations')
-        .select(`
-          *,
-          members:conversation_members(
-            user_id,
-            role,
-            profile:profiles(id, username, display_name, avatar_url)
-          )
-        `)
-        .in('id', conversationIds)
-        .order('updated_at', { ascending: false });
+        .rpc('get_user_conversations', { _user_id: userId });
+
+      console.log('[DEBUG] get_user_conversations data:', JSON.stringify(data));
+      console.log('[DEBUG] get_user_conversations error:', error);
+
+      if (error) {
+        console.error('[ERROR] get_user_conversations failed:', error);
+        return errorResponse('DATABASE_ERROR', error.message, 500);
+      }
 
       await logUsage(supabase, auth, '/conversations', 'GET', 200, Date.now() - startTime, ipAddress);
       return successResponse(data || [], 200, { count: data?.length || 0 });

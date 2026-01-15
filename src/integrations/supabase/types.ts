@@ -668,6 +668,20 @@ export type Database = {
         Args: { _user_id: string }
         Returns: string[]
       }
+      get_user_conversations: {
+        Args: { _user_id: string }
+        Returns: {
+          avatar_url: string
+          created_at: string
+          created_by: string
+          id: string
+          is_group: boolean
+          last_message: Json
+          members: Json
+          name: string
+          updated_at: string
+        }[]
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
