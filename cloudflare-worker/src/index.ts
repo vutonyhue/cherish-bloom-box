@@ -215,22 +215,45 @@ function generateRequestId(): string {
  * Check if origin is allowed
  */
 function isOriginAllowed(origin: string | null, allowedOrigins: string[], envAllowed?: string): boolean {
+  // Always allow if no origin (server-to-server requests, curl, etc.)
+  if (!origin) {
+    return true;
+  }
+
   // Parse env allowed origins
   const envOrigins = envAllowed?.split(',').map(o => o.trim()).filter(Boolean) || [];
   const allAllowed = [...allowedOrigins, ...envOrigins];
   
+  // If no restrictions configured, allow all
   if (allAllowed.length === 0) {
-    return true; // No restrictions
+    return true;
   }
-  if (!origin) {
+
+  // Parse origin URL to get hostname
+  let originHost: string;
+  try {
+    originHost = new URL(origin).hostname;
+  } catch {
     return false;
   }
+
   return allAllowed.some(allowed => {
+    // Universal wildcard
     if (allowed === '*') return true;
+    
+    // Subdomain wildcard: *.example.com
     if (allowed.startsWith('*.')) {
       const domain = allowed.slice(2);
-      return origin.endsWith(domain) || origin === `https://${domain}` || origin === `http://${domain}`;
+      return originHost === domain || originHost.endsWith('.' + domain);
     }
+    
+    // Localhost with port wildcard: http://localhost:*
+    if (allowed.endsWith(':*')) {
+      const baseUrl = allowed.slice(0, -2);
+      return origin.startsWith(baseUrl + ':');
+    }
+    
+    // Exact match
     return origin === allowed;
   });
 }
@@ -899,15 +922,15 @@ export default {
     const origin = request.headers.get('Origin');
     const requestId = generateRequestId();
 
-    // Handle CORS preflight
+    // Handle CORS preflight - be permissive to avoid blocking legitimate requests
     if (request.method === 'OPTIONS') {
-      const corsOrigin = isOriginAllowed(origin, [], env.ALLOWED_ORIGINS) ? origin : null;
+      const corsOrigin = origin && isOriginAllowed(origin, [], env.ALLOWED_ORIGINS) ? origin : '*';
       return new Response(null, {
         status: 204,
         headers: {
-          'Access-Control-Allow-Origin': corsOrigin || '*',
+          'Access-Control-Allow-Origin': corsOrigin,
           'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-funchat-api-key, x-request-id',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-funchat-api-key, x-request-id, x-client-info, apikey',
           'Access-Control-Max-Age': '86400',
           'Access-Control-Allow-Credentials': 'true',
         },
