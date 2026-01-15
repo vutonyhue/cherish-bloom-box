@@ -170,7 +170,14 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    
+    // Create admin client that fully bypasses RLS
+    const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
 
     // Validate authentication (dual mode)
     const auth = validateAuth(req);
@@ -227,10 +234,15 @@ serve(async (req) => {
       }
 
       // List all conversations
-      const { data: memberData } = await supabase
+      console.log('[DEBUG] Fetching conversations for userId:', userId);
+      
+      const { data: memberData, error: memberError } = await supabase
         .from('conversation_members')
         .select('conversation_id')
         .eq('user_id', userId);
+
+      console.log('[DEBUG] memberData:', JSON.stringify(memberData));
+      console.log('[DEBUG] memberError:', memberError);
 
       const conversationIds = memberData?.map((m: any) => m.conversation_id) || [];
 
