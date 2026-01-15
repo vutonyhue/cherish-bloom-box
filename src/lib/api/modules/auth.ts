@@ -21,21 +21,21 @@ export function createAuthApi(client: ApiClient) {
      * Get current user's profile
      */
     async getMe(): Promise<ApiResponse<ProfileResponse>> {
-      return client.get<ProfileResponse>('/v1/me');
+      return client.get<ProfileResponse>('/api-users/me');
     },
 
     /**
      * Update current user's profile
      */
     async updateMe(data: UpdateProfileRequest): Promise<ApiResponse<ProfileResponse>> {
-      return client.put<ProfileResponse>('/v1/me', data);
+      return client.put<ProfileResponse>('/api-users/me', data);
     },
 
     /**
      * Sync profile (upsert - create if not exists, update if exists)
      */
     async syncProfile(data: UpdateProfileRequest): Promise<ApiResponse<ProfileResponse>> {
-      return client.post<ProfileResponse>('/v1/profiles/sync', data);
+      return client.post<ProfileResponse>('/api-users/sync', data);
     },
   };
 }

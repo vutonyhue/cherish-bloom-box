@@ -21,42 +21,42 @@ export function createUsersApi(client: ApiClient) {
         q: query,
         limit: limit.toString(),
       });
-      return client.get<UserSearchResponse>(`/v1/users/search?${queryParams.toString()}`);
+      return client.get<UserSearchResponse>(`/api-users/search?${queryParams.toString()}`);
     },
 
     /**
      * Get a user's public profile by ID
      */
     async getProfile(userId: string): Promise<ApiResponse<ProfileResponse>> {
-      return client.get<ProfileResponse>(`/v1/users/${userId}`);
+      return client.get<ProfileResponse>(`/api-users/${userId}`);
     },
 
     /**
      * Get multiple users' profiles by IDs
      */
     async getProfiles(userIds: string[]): Promise<ApiResponse<ProfileResponse[]>> {
-      return client.post<ProfileResponse[]>('/v1/users/batch', { user_ids: userIds });
+      return client.post<ProfileResponse[]>('/api-users/batch', { user_ids: userIds });
     },
 
     /**
      * Check if a username is available
      */
     async checkUsername(username: string): Promise<ApiResponse<{ available: boolean }>> {
-      return client.get<{ available: boolean }>(`/v1/users/check-username?username=${encodeURIComponent(username)}`);
+      return client.get<{ available: boolean }>(`/api-users/check-username?username=${encodeURIComponent(username)}`);
     },
 
     /**
      * Update user's online status
      */
     async updateStatus(status: 'online' | 'away' | 'offline'): Promise<ApiResponse<void>> {
-      return client.patch<void>('/v1/users/status', { status });
+      return client.patch<void>('/api-users/status', { status });
     },
 
     /**
      * Update last seen timestamp
      */
     async updateLastSeen(): Promise<ApiResponse<void>> {
-      return client.patch<void>('/v1/users/last-seen');
+      return client.patch<void>('/api-users/last-seen');
     },
   };
 }

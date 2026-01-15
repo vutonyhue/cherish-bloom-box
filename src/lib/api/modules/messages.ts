@@ -39,7 +39,7 @@ export function createMessagesApi(client: ApiClient) {
       
       const query = queryParams.toString();
       return client.get<MessageListResponse>(
-        `/v1/conversations/${conversationId}/messages${query ? `?${query}` : ''}`
+        `/api-chat/conversations/${conversationId}/messages${query ? `?${query}` : ''}`
       );
     },
 
@@ -47,14 +47,14 @@ export function createMessagesApi(client: ApiClient) {
      * Send a text message
      */
     async send(conversationId: string, data: SendMessageRequest): Promise<ApiResponse<MessageResponse>> {
-      return client.post<MessageResponse>(`/v1/conversations/${conversationId}/messages`, data);
+      return client.post<MessageResponse>(`/api-chat/conversations/${conversationId}/messages`, data);
     },
 
     /**
      * Send a crypto transaction message
      */
     async sendCrypto(conversationId: string, data: SendCryptoMessageRequest): Promise<ApiResponse<MessageResponse>> {
-      return client.post<MessageResponse>(`/v1/conversations/${conversationId}/messages/crypto`, data);
+      return client.post<MessageResponse>(`/api-chat/conversations/${conversationId}/messages/crypto`, data);
     },
 
     /**
@@ -69,7 +69,7 @@ export function createMessagesApi(client: ApiClient) {
       caption?: string;
     }): Promise<ApiResponse<MessageResponse>> {
       const messageType = data.file_type.startsWith('image/') ? 'image' : 'file';
-      return client.post<MessageResponse>(`/v1/conversations/${conversationId}/messages`, {
+      return client.post<MessageResponse>(`/api-chat/conversations/${conversationId}/messages`, {
         content: data.content,
         message_type: messageType,
         metadata: {
@@ -89,7 +89,7 @@ export function createMessagesApi(client: ApiClient) {
       file_url: string;
       duration: number;
     }): Promise<ApiResponse<MessageResponse>> {
-      return client.post<MessageResponse>(`/v1/conversations/${conversationId}/messages`, {
+      return client.post<MessageResponse>(`/api-chat/conversations/${conversationId}/messages`, {
         content: 'Tin nhắn thoại',
         message_type: 'voice',
         metadata: {
@@ -104,21 +104,21 @@ export function createMessagesApi(client: ApiClient) {
      * Delete a message (soft delete)
      */
     async delete(messageId: string): Promise<ApiResponse<void>> {
-      return client.delete<void>(`/v1/messages/${messageId}`);
+      return client.delete<void>(`/api-chat/messages/${messageId}`);
     },
 
     /**
      * Edit a message
      */
     async edit(messageId: string, content: string): Promise<ApiResponse<MessageResponse>> {
-      return client.patch<MessageResponse>(`/v1/messages/${messageId}`, { content });
+      return client.patch<MessageResponse>(`/api-chat/messages/${messageId}`, { content });
     },
 
     /**
      * Forward a message to another conversation
      */
     async forward(messageId: string, toConversationId: string): Promise<ApiResponse<MessageResponse>> {
-      return client.post<MessageResponse>(`/v1/messages/${messageId}/forward`, {
+      return client.post<MessageResponse>(`/api-chat/messages/${messageId}/forward`, {
         to_conversation_id: toConversationId,
       });
     },

@@ -25,8 +25,8 @@ import { createStorageApi } from './modules/storage';
 import { createTypingApi } from './modules/typing';
 import { createWidgetApi } from './modules/widget';
 
-// API Gateway URL
-export const API_BASE_URL = 'https://funchat-api-gateway.yeuchat.workers.dev';
+// API Base URL - Direct to Supabase Edge Functions (bypass Cloudflare Worker for now)
+export const API_BASE_URL = 'https://ovswkgujezxwygselcap.supabase.co/functions/v1';
 
 // Debug mode in development
 const DEBUG = import.meta.env.DEV;
