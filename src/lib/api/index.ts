@@ -23,6 +23,7 @@ import { createApiKeysApi } from './modules/apiKeys';
 import { createReferralApi } from './modules/referral';
 import { createStorageApi } from './modules/storage';
 import { createTypingApi } from './modules/typing';
+import { createWidgetApi } from './modules/widget';
 
 // Get base URL from environment or default to production
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://funchat-api-gateway.india-25d.workers.dev';
@@ -68,6 +69,7 @@ export const api = {
   referral: createReferralApi(apiClient),
   storage: createStorageApi(apiClient),
   typing: createTypingApi(apiClient),
+  widget: createWidgetApi(apiClient),
 };
 
 // Export types

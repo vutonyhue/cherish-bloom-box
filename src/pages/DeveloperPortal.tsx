@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -80,20 +80,25 @@ export default function DeveloperPortal() {
 
   const fetchData = async () => {
     setLoading(true);
-    const { data } = await supabase.from('api_keys').select('*').order('created_at', { ascending: false });
-    setApiKeys(data || []);
+    try {
+      const response = await api.apiKeys.list();
+      if (response.ok && response.data) {
+        setApiKeys(response.data.keys || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch API keys:', error);
+    }
     setLoading(false);
   };
 
   const fetchConversations = async () => {
-    const { data } = await supabase
-      .from('conversation_members')
-      .select('conversation:conversations(id, name, is_group)')
-      .eq('user_id', user?.id);
-    
-    if (data) {
-      const convos = data.map((d: any) => d.conversation).filter(Boolean);
-      setConversations(convos);
+    try {
+      const response = await api.conversations.list();
+      if (response.ok && response.data) {
+        setConversations(response.data.conversations || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch conversations:', error);
     }
   };
 
@@ -105,33 +110,40 @@ export default function DeveloperPortal() {
 
     const origins = allowedOrigins.split(',').map(o => o.trim()).filter(Boolean);
 
-    const { data, error } = await supabase.functions.invoke('api-keys', {
-      method: 'POST',
-      body: { 
-        name: newKeyName, 
+    try {
+      const response = await api.apiKeys.create({
+        name: newKeyName,
         scopes: selectedScopes,
-        allowed_origins: origins,
-      },
-    });
+        allowed_origins: origins.length > 0 ? origins : undefined,
+      });
 
-    if (error || !data?.success) {
-      toast.error("Lỗi tạo API key");
-      return;
+      if (!response.ok || !response.data) {
+        toast.error(response.error?.message || "Lỗi tạo API key");
+        return;
+      }
+
+      setCreatedKey(response.data.api_key);
+      setNewKeyName("");
+      setSelectedScopes(['chat:read', 'users:read']);
+      setAllowedOrigins("");
+      fetchData();
+      toast.success("Tạo API key thành công! Lưu lại key ngay.");
+    } catch (error: any) {
+      toast.error(error.message || "Lỗi tạo API key");
     }
-
-    setCreatedKey(data.data.api_key);
-    setNewKeyName("");
-    setSelectedScopes(['chat:read', 'users:read']);
-    setAllowedOrigins("");
-    fetchData();
-    toast.success("Tạo API key thành công! Lưu lại key ngay.");
   };
 
   const deleteApiKey = async (id: string) => {
-    const { error } = await supabase.from('api_keys').delete().eq('id', id);
-    if (!error) {
-      fetchData();
-      toast.success("Đã xóa API key");
+    try {
+      const response = await api.apiKeys.delete(id);
+      if (response.ok) {
+        fetchData();
+        toast.success("Đã xóa API key");
+      } else {
+        toast.error(response.error?.message || "Lỗi xóa API key");
+      }
+    } catch (error: any) {
+      toast.error(error.message || "Lỗi xóa API key");
     }
   };
 
@@ -147,32 +159,24 @@ export default function DeveloperPortal() {
     }
 
     // Find an API key with chat:read scope
-    const apiKey = apiKeys.find(k => k.is_active && k.scopes?.includes('chat:read'));
-    if (!apiKey) {
+    const apiKeyWithScope = apiKeys.find(k => k.is_active && k.scopes?.includes('chat:read'));
+    if (!apiKeyWithScope) {
       toast.error("Bạn cần tạo API key với scope 'chat:read' trước");
       return;
     }
 
     setGeneratingToken(true);
     try {
-      const { data, error } = await supabase.functions.invoke('widget-token', {
-        body: {
-          action: 'create',
-          conversation_id: selectedConversation,
-          scopes: ['chat:read', 'chat:write'],
-        },
-        headers: {
-          'x-funchat-key-id': apiKey.id,
-          'x-funchat-user-id': user?.id,
-          'x-funchat-scopes': apiKey.scopes?.join(',') || '',
-        },
-      });
+      const response = await api.widget.generateToken(
+        selectedConversation,
+        ['chat:read', 'chat:write']
+      );
 
-      if (error || !data?.token) {
-        throw new Error(data?.error || 'Failed to generate token');
+      if (!response.ok || !response.data?.token) {
+        throw new Error(response.error?.message || 'Failed to generate token');
       }
 
-      setWidgetToken(data.token);
+      setWidgetToken(response.data.token);
       toast.success("Widget token đã được tạo!");
     } catch (err: any) {
       toast.error(err.message || "Lỗi tạo widget token");
