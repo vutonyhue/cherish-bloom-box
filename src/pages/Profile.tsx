@@ -7,7 +7,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks/useAuth";
 import { useWallet } from "@/hooks/useWallet";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { ArrowLeft, Camera, Loader2, Save, User, Wallet, Copy, ExternalLink, CheckCircle, QrCode, Phone } from "lucide-react";
 import QRCode from "react-qr-code";
@@ -80,26 +80,15 @@ const Profile = () => {
     setUploading(true);
 
     try {
-      const fileExt = file.name.split(".").pop();
-      const fileName = `${user.id}/avatar.${fileExt}`;
+      // Use API storage module for upload
+      const { url, error } = await api.storage.uploadAvatar(user.id, file);
 
-      // Upload to storage
-      const { error: uploadError } = await supabase.storage
-        .from("avatars")
-        .upload(fileName, file, { upsert: true });
+      if (error) throw error;
 
-      if (uploadError) throw uploadError;
+      setAvatarUrl(url);
 
-      // Get public URL
-      const { data: urlData } = supabase.storage
-        .from("avatars")
-        .getPublicUrl(fileName);
-
-      const newAvatarUrl = `${urlData.publicUrl}?t=${Date.now()}`;
-      setAvatarUrl(newAvatarUrl);
-
-      // Update profile
-      await updateProfile({ avatar_url: newAvatarUrl });
+      // Update profile with new avatar URL
+      await updateProfile({ avatar_url: url });
       toast.success("Cập nhật avatar thành công!");
     } catch (error: any) {
       console.error("Upload error:", error);

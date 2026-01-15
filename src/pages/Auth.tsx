@@ -12,7 +12,7 @@ import { PasswordStrengthIndicator } from '@/components/auth/PasswordStrengthInd
 import { PasswordInput } from '@/components/auth/PasswordInput';
 import { UsernameInput } from '@/components/auth/UsernameInput';
 import { EmailInput } from '@/components/auth/EmailInput';
-import { supabase } from '@/integrations/supabase/client';
+import { api } from '@/lib/api';
 
 const emailSchema = z.string().email('Email không hợp lệ');
 const passwordSchema = z.string().min(6, 'Mật khẩu phải có ít nhất 6 ký tự');
@@ -55,23 +55,18 @@ export default function Auth() {
     }
   }, [searchParams]);
 
-  // Use referral code after signup
-  const useStoredReferralCode = useCallback(async (accessToken: string) => {
+  // Use referral code after signup - now uses API Gateway
+  const useStoredReferralCode = useCallback(async () => {
     const storedCode = localStorage.getItem(REFERRAL_CODE_KEY);
     if (!storedCode) return;
 
     try {
-      const { data, error } = await supabase.functions.invoke('use-referral-code', {
-        body: { code: storedCode },
-        headers: {
-          Authorization: `Bearer ${accessToken}`
-        }
-      });
+      const response = await api.referral.useCode(storedCode);
 
-      if (!error && data?.success) {
+      if (response.ok && response.data?.success) {
         toast({
           title: 'Mã giới thiệu đã được áp dụng!',
-          description: `Bạn được giới thiệu bởi ${data.referrer_username}`,
+          description: `Bạn được giới thiệu bởi ${response.data.referrer_username}`,
         });
       }
       // Clear the stored code regardless of success
@@ -83,9 +78,9 @@ export default function Auth() {
   }, [toast]);
 
   useEffect(() => {
-    if (user && session?.access_token) {
+    if (user && session) {
       // Try to use stored referral code after login/signup
-      useStoredReferralCode(session.access_token);
+      useStoredReferralCode();
       navigate('/chat');
     }
   }, [user, session, navigate, useStoredReferralCode]);
