@@ -78,8 +78,8 @@ export function createConversationsApi(client: ApiClient) {
      */
     async findDirectConversation(otherUserId: string): Promise<ApiResponse<ConversationResponse | null>> {
       const response = await client.get<ConversationResponse | null>(`/v1/conversations/direct/${otherUserId}`);
-      // Treat 404 as "not found" - return null instead of error
-      if (!response.ok && response.error?.message?.includes('404')) {
+      // Treat NOT_FOUND as "not found" - return null instead of error
+      if (!response.ok && (response.error?.code === 'NOT_FOUND' || response.error?.message?.includes('not found'))) {
         return { ok: true, data: null };
       }
       return response;
