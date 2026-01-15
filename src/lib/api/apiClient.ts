@@ -60,11 +60,25 @@ class ApiClient {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
           'X-Request-ID': requestId,
+          // Supabase anon key required for Edge Functions
+          'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im92c3drZ3VqZXp4d3lnc2VsY2FwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg0NDUxNzIsImV4cCI6MjA4NDAyMTE3Mn0.TS-IDWedMaO-snNJolAjluN4t3SKv8gFU8-z44uYvE8',
           ...config?.headers,
         };
 
         if (accessToken) {
           headers['Authorization'] = `Bearer ${accessToken}`;
+          headers['x-auth-mode'] = 'jwt';
+          
+          // Decode JWT to get user_id for Edge Functions
+          try {
+            const payload = JSON.parse(atob(accessToken.split('.')[1]));
+            if (payload.sub) {
+              headers['x-funchat-user-id'] = payload.sub;
+              headers['x-funchat-scopes'] = 'chat:read,chat:write,users:read,users:write';
+            }
+          } catch (e) {
+            console.warn('[API] Failed to decode JWT for user_id');
+          }
         }
 
         const url = `${this.config.baseUrl}${path}`;
