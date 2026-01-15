@@ -1,4 +1,4 @@
-project_id = "dgeadmmbkvcsgizsnbpi"
+project_id = "ovswkgujezxwygselcap"
 
 [api]
 enabled = true
@@ -19,7 +19,7 @@ api_url = "http://localhost"
 [auth]
 enabled = true
 site_url = "http://localhost:3000"
-additional_redirect_urls = ["https://dgeadmmbkvcsgizsnbpi.supabase.co"]
+additional_redirect_urls = ["https://ovswkgujezxwygselcap.supabase.co"]
 jwt_expiry = 3600
 enable_signup = true
 
