@@ -750,6 +750,9 @@ async function handleUserRoute(
     targetPath = targetPath.replace('/v1/me', '/api-users/me');
   } else if (targetPath.startsWith('/v1/profiles')) {
     targetPath = targetPath.replace('/v1/profiles', '/api-users/profiles');
+  } else if (targetPath.match(/^\/v1\/conversations\/direct\/.+$/)) {
+    // Handle /v1/conversations/direct/:userId - must be before general conversations route
+    targetPath = targetPath.replace('/v1/conversations/direct/', '/api-chat/conversations/direct/');
   } else if (targetPath.startsWith('/v1/conversations')) {
     targetPath = targetPath.replace('/v1/conversations', '/api-chat/conversations');
   } else if (targetPath.startsWith('/v1/messages')) {

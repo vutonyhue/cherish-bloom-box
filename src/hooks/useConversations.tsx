@@ -35,9 +35,14 @@ export function useConversations() {
       }
 
       // Transform API response to Conversation type
-      const conversationsWithDetails = response.data.conversations.map(conv => ({
+      // Edge Function returns array directly or object with conversations
+      const rawConversations = Array.isArray(response.data) 
+        ? response.data 
+        : (response.data as any)?.conversations || [];
+      
+      const conversationsWithDetails = rawConversations.map((conv: any) => ({
         ...conv,
-        members: conv.members?.map(m => ({
+        members: conv.members?.map((m: any) => ({
           ...m,
           profile: m.profile as Profile,
         })),
