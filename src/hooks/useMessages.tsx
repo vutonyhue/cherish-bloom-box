@@ -1,22 +1,24 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from './useAuth';
 import { Message, Profile } from '@/types';
-import { api, API_BASE_URL, getAccessToken, createPollingConnection, SSEConnection } from '@/lib/api';
+import { api, API_BASE_URL, getAccessToken, createSSEConnection, createPollingConnection, SSEConnection } from '@/lib/api';
 import { toast } from 'sonner';
 
 /**
  * useMessages hook - Manages chat messages for a conversation
  * 
- * Refactored to use API Gateway instead of direct Supabase access.
- * Uses polling for realtime updates (SSE can be enabled when Worker supports it).
+ * Refactored to use API Gateway with SSE for realtime updates.
+ * Falls back to polling if SSE connection fails.
  */
 export function useMessages(conversationId: string | null) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [userProfile, setUserProfile] = useState<Profile | null>(null);
+  const [useSSE, setUseSSE] = useState(true); // Try SSE first
   const connectionRef = useRef<SSEConnection | null>(null);
   const lastFetchRef = useRef<string | null>(null);
+  const sseFailCountRef = useRef(0);
 
   // Fetch current user profile for optimistic updates
   useEffect(() => {
@@ -54,7 +56,6 @@ export function useMessages(conversationId: string | null) {
     }
 
     // Prevent duplicate fetches
-    const fetchKey = `${conversationId}-${Date.now()}`;
     if (lastFetchRef.current === conversationId && messages.length > 0) {
       // Just refresh without clearing
     } else {
@@ -102,69 +103,138 @@ export function useMessages(conversationId: string | null) {
     fetchMessages();
   }, [fetchMessages]);
 
-  // Setup polling for realtime updates
-  // Note: Replace with SSE when Worker supports long-lived connections
+  // Helper to handle incoming message from SSE
+  const handleIncomingMessage = useCallback((msg: Message) => {
+    setMessages(prev => {
+      // Prevent duplicates
+      if (prev.some(m => m.id === msg.id)) return prev;
+      
+      // Handle optimistic message confirmation
+      const optimisticIdx = prev.findIndex(m => 
+        m._sending && 
+        m.content === msg.content && 
+        m.sender_id === msg.sender_id
+      );
+      
+      if (optimisticIdx > -1) {
+        // Replace optimistic with real message
+        const updated = [...prev];
+        updated[optimisticIdx] = { ...msg, _sending: false, _failed: false };
+        return updated;
+      }
+      
+      // Add new message
+      return [...prev, msg];
+    });
+  }, []);
+
+  // Setup SSE or polling for realtime updates
   useEffect(() => {
     if (!conversationId || !user) return;
 
-    // Create polling connection for realtime updates
-    connectionRef.current = createPollingConnection(
-      async () => {
-        // Only fetch if we already have messages (to detect new ones)
-        if (messages.length > 0) {
-          const response = await api.messages.list(conversationId, { limit: 20 });
-          if (response.ok && response.data) {
-            const newMessages = response.data.messages;
+    // Close any existing connection
+    connectionRef.current?.close();
+    connectionRef.current = null;
+
+    if (useSSE) {
+      // Use SSE for realtime updates
+      console.log('[useMessages] Setting up SSE connection');
+      
+      connectionRef.current = createSSEConnection(
+        API_BASE_URL,
+        conversationId,
+        getAccessToken,
+        {
+          onMessage: (msg) => {
+            console.log('[useMessages] SSE message received:', msg.id);
+            handleIncomingMessage(msg);
+            sseFailCountRef.current = 0; // Reset fail count on successful message
+          },
+          onTyping: (data) => {
+            // Handle typing indicator (can be integrated with useTypingIndicator)
+            console.log('[useMessages] Typing:', data);
+          },
+          onPresence: (data) => {
+            // Handle presence updates
+            console.log('[useMessages] Presence:', data);
+          },
+          onError: (error) => {
+            console.error('[useMessages] SSE error:', error);
+            sseFailCountRef.current++;
             
-            setMessages(prev => {
-              // Find truly new messages
-              const existingIds = new Set(prev.map(m => m.id));
-              const additions = newMessages.filter(m => !existingIds.has(m.id));
-              
-              if (additions.length > 0) {
-                // Add new messages, maintaining optimistic ones
-                const optimisticMessages = prev.filter(m => m._sending);
-                const serverMessages = prev.filter(m => !m._sending);
-                
-                // Merge: server messages + new additions + optimistic
-                const merged = [...serverMessages];
-                additions.forEach(newMsg => {
-                  // Check if this is a server confirmation of an optimistic message
-                  const matchingOptimistic = optimisticMessages.find(opt => 
-                    opt.content === newMsg.content && 
-                    opt.sender_id === newMsg.sender_id
-                  );
-                  
-                  if (matchingOptimistic) {
-                    // Replace optimistic with real
-                    const idx = optimisticMessages.indexOf(matchingOptimistic);
-                    if (idx > -1) optimisticMessages.splice(idx, 1);
-                  }
-                  
-                  if (!merged.some(m => m.id === newMsg.id)) {
-                    merged.push(newMsg as Message);
-                  }
-                });
-                
-                return [...merged, ...optimisticMessages];
-              }
-              
-              return prev;
-            });
-          }
+            // Fallback to polling after multiple SSE failures
+            if (sseFailCountRef.current >= 3) {
+              console.log('[useMessages] Falling back to polling');
+              setUseSSE(false);
+            }
+          },
+          onReconnect: () => {
+            console.log('[useMessages] SSE reconnecting...');
+          },
         }
-      },
-      {
-        onError: (error) => console.error('[useMessages] Polling error:', error),
-      },
-      3000 // Poll every 3 seconds
-    );
+      );
+    } else {
+      // Fallback: Use polling for realtime updates
+      console.log('[useMessages] Using polling fallback');
+      
+      connectionRef.current = createPollingConnection(
+        async () => {
+          // Only fetch if we already have messages (to detect new ones)
+          if (messages.length > 0) {
+            const response = await api.messages.list(conversationId, { limit: 20 });
+            if (response.ok && response.data) {
+              const newMessages = response.data.messages;
+              
+              setMessages(prev => {
+                // Find truly new messages
+                const existingIds = new Set(prev.map(m => m.id));
+                const additions = newMessages.filter(m => !existingIds.has(m.id));
+                
+                if (additions.length > 0) {
+                  // Add new messages, maintaining optimistic ones
+                  const optimisticMessages = prev.filter(m => m._sending);
+                  const serverMessages = prev.filter(m => !m._sending);
+                  
+                  // Merge: server messages + new additions + optimistic
+                  const merged = [...serverMessages];
+                  additions.forEach(newMsg => {
+                    // Check if this is a server confirmation of an optimistic message
+                    const matchingOptimistic = optimisticMessages.find(opt => 
+                      opt.content === newMsg.content && 
+                      opt.sender_id === newMsg.sender_id
+                    );
+                    
+                    if (matchingOptimistic) {
+                      // Replace optimistic with real
+                      const idx = optimisticMessages.indexOf(matchingOptimistic);
+                      if (idx > -1) optimisticMessages.splice(idx, 1);
+                    }
+                    
+                    if (!merged.some(m => m.id === newMsg.id)) {
+                      merged.push(newMsg as Message);
+                    }
+                  });
+                  
+                  return [...merged, ...optimisticMessages];
+                }
+                
+                return prev;
+              });
+            }
+          }
+        },
+        {
+          onError: (error) => console.error('[useMessages] Polling error:', error),
+        },
+        3000 // Poll every 3 seconds
+      );
+    }
 
     return () => {
       connectionRef.current?.close();
       connectionRef.current = null;
     };
-  }, [conversationId, user, messages.length]);
+  }, [conversationId, user, useSSE, handleIncomingMessage, messages.length]);
 
   // Send message with OPTIMISTIC UPDATE
   const sendMessage = async (content: string, messageType = 'text', metadata = {}, replyToId?: string) => {

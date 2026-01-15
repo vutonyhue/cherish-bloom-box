@@ -70,6 +70,7 @@ export function createSSEConnection(
         reconnectAttempts = 0;
       };
 
+      // Handle 'message' events from SSE
       eventSource.addEventListener('message', (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -77,6 +78,29 @@ export function createSSEConnection(
         } catch (e) {
           console.error('[SSE] Failed to parse message:', e);
         }
+      });
+
+      // Handle 'connected' event
+      eventSource.addEventListener('connected', (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          console.log('[SSE] Connected to conversation:', data.conversation_id);
+        } catch (e) {
+          console.error('[SSE] Failed to parse connected event:', e);
+        }
+      });
+
+      // Handle 'reconnect' event from server
+      eventSource.addEventListener('reconnect', (event) => {
+        console.log('[SSE] Server requested reconnect');
+        eventSource?.close();
+        eventSource = null;
+        
+        // Immediate reconnect since server requested it
+        setTimeout(() => {
+          callbacks.onReconnect?.();
+          connect();
+        }, 500);
       });
 
       eventSource.addEventListener('typing', (event) => {
