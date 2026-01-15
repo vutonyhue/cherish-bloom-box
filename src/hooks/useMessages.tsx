@@ -73,8 +73,13 @@ export function useMessages(conversationId: string | null) {
       }
 
       // Transform API response, attach reply_to references
+      // Handle both array response and object with messages property
+      const rawMessages = Array.isArray(response.data) 
+        ? response.data 
+        : (response.data as any)?.messages || [];
+      
       const messageMap = new Map<string, Message>();
-      response.data.messages.forEach(m => {
+      rawMessages.forEach((m: any) => {
         const msg = {
           ...m,
           sender: m.sender as Profile | undefined,
@@ -83,7 +88,7 @@ export function useMessages(conversationId: string | null) {
       });
 
       // Attach reply_to references
-      const messagesWithReplies = response.data.messages.map(m => {
+      const messagesWithReplies = rawMessages.map((m: any) => {
         const msg = messageMap.get(m.id)!;
         if (m.reply_to_id && messageMap.has(m.reply_to_id)) {
           msg.reply_to = messageMap.get(m.reply_to_id);
@@ -183,7 +188,10 @@ export function useMessages(conversationId: string | null) {
           if (messages.length > 0) {
             const response = await api.messages.list(conversationId, { limit: 20 });
             if (response.ok && response.data) {
-              const newMessages = response.data.messages;
+              // Handle both array response and object with messages property
+              const newMessages = Array.isArray(response.data) 
+                ? response.data 
+                : (response.data as any)?.messages || [];
               
               setMessages(prev => {
                 // Find truly new messages
